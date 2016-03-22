@@ -17,32 +17,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if node['platform'] == 'ubuntu' && node['platform_version'].to_f == 8.04
-  log "Ubuntu 8.04 does not supply sufficient development libraries via APT to install CouchDB #{node['couch_db']['src_version']} from source."
-  return
+if node['platform_family'] == 'rhel' && node['platform_version'].to_f < 6.0
+  Chef::Log.warn('RHEL/CentOS < 6.0 is unsupported by couchdb::source')
 end
 
-couchdb_tar_gz = File.join(Chef::Config[:file_cache_path], '/', "apache-couchdb-#{node['couch_db']['src_version']}.tar.gz")
+couchdb_tar_gz = "apache-couchdb-#{node['couch_db']['src_version']}.tar.gz"
 compile_flags = ''
 dev_pkgs = []
 
 case node['platform_family']
 when 'debian'
-
   dev_pkgs << 'libicu-dev'
   dev_pkgs << 'libcurl4-openssl-dev'
   dev_pkgs << value_for_platform(
-    'debian' => { 
-      '~> 7.0' => 'libmozjs185-dev',
-      'default' => 'libmozjs-dev'
-    },
+    'debian' => { 'default' => 'libmozjs-dev' },
     'ubuntu' => {
       '10.04' => 'xulrunner-dev',
       '14.04' => 'libmozjs185-dev',
       'default' => 'libmozjs-dev'
     }
   )
-
 when 'rhel', 'fedora'
   include_recipe 'yum-epel'
 
@@ -52,33 +46,25 @@ when 'rhel', 'fedora'
   }
 
   # awkwardly tell ./configure where to find Erlang's headers
-  if Dir.exists?("/usr/lib64/erlang/usr/include")
-    compile_flags = "--with-erlang=/usr/lib64/erlang/usr/include"
-  else
-    compile_flags = "--with-erlang=/usr/lib/erlang/usr/include"
-  end
+  bitness = node['kernel']['machine'] =~ /64/ ? 'lib64' : 'lib'
+  compile_flags = "--with-erlang=/usr/#{bitness}/erlang/usr/include"
 end
 
-include_recipe 'erlang' if node['couch_db']['install_erlang']
+include_recipe 'erlang::esl' if node['couch_db']['install_erlang']
 
 dev_pkgs.each do |pkg|
   package pkg
 end
 
-# Install couch from source on first run only (not_if /usr/local/bin/couchdb exists)
-remote_file couchdb_tar_gz do
+ark couchdb_tar_gz do
+  url node['couch_db']['src_mirror']
   checksum node['couch_db']['src_checksum']
-  source node['couch_db']['src_mirror']
+  version node['couch_db']['src_vesion']
+  action :install_with_make
+  if node['platform_family'] == 'rhel' && node['couch_db']['install_erlang']
+    autoconf_opts [ '--with-erlang=/usr/lib/erlang/usr/include' ]
+  end
   not_if { ::File.exists?('/usr/local/bin/couchdb') }
-end
- 
-bash "install couchdb #{node['couch_db']['src_version']}" do
-  cwd Chef::Config[:file_cache_path]
-  code <<-EOH
-    tar -zxf #{couchdb_tar_gz}
-    cd apache-couchdb-#{node['couch_db']['src_version']} && ./configure #{compile_flags} && make && make install
-  EOH
-  not_if { "test -f /usr/local/bin/couchdb && /usr/local/bin/couchdb -V | grep 'Apache CouchDB #{node['couch_db']['src_version']}'" || ::File.exists?('/usr/local/bin/couchdb') }
 end
 
 # Manual binary provisioning
@@ -116,14 +102,28 @@ template '/usr/local/etc/couchdb/local.ini' do
   notifies :restart, 'service[couchdb]'
 end
 
-cookbook_file '/etc/init.d/couchdb' do
-  source 'couchdb.init'
-  owner 'root'
-  group 'root'
-  mode '0755'
+if node['platform'] == 'ubuntu'
+  template '/etc/init/couchdb.conf' do
+    action :create
+    source 'couchdb.upstart.erb'
+    owner 'root'
+    group 'root'
+    mode '0755'
+    notifies :restart, 'service[couchdb]', :delayed
+  end
+else
+  cookbook_file '/etc/init.d/couchdb' do
+    source 'couchdb.init'
+    owner 'root'
+    group 'root'
+    mode '0755'
+  end
 end
 
 service 'couchdb' do
+  if node['platform'] == 'ubuntu'
+    provider Chef::Provider::Service::Upstart
+  end
   supports [:restart, :status]
   action [:enable, :start]
 end
