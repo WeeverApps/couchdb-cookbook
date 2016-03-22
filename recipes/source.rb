@@ -65,21 +65,21 @@ dev_pkgs.each do |pkg|
   package pkg
 end
 
-# Disabled couch source download for manually binary update
-#
-# remote_file couchdb_tar_gz do
-#   checksum node['couch_db']['src_checksum']
-#   source node['couch_db']['src_mirror']
-# end
-# 
-# bash "install couchdb #{node['couch_db']['src_version']}" do
-#  cwd Chef::Config[:file_cache_path]
-#  code <<-EOH
-#    tar -zxf #{couchdb_tar_gz}
-#    cd apache-couchdb-#{node['couch_db']['src_version']} && ./configure #{compile_flags} && make && make install
-#  EOH
-#  not_if "test -f /usr/local/bin/couchdb && /usr/local/bin/couchdb -V | grep 'Apache CouchDB #{node['couch_db']['src_version']}'"
-# end
+# Install couch from source on first run only (not_if /usr/local/bin/couchdb exists)
+remote_file couchdb_tar_gz do
+  checksum node['couch_db']['src_checksum']
+  source node['couch_db']['src_mirror']
+  not_if { ::File.exists?('/usr/local/bin/couchdb') }
+end
+ 
+bash "install couchdb #{node['couch_db']['src_version']}" do
+  cwd Chef::Config[:file_cache_path]
+  code <<-EOH
+    tar -zxf #{couchdb_tar_gz}
+    cd apache-couchdb-#{node['couch_db']['src_version']} && ./configure #{compile_flags} && make && make install
+  EOH
+  not_if { "test -f /usr/local/bin/couchdb && /usr/local/bin/couchdb -V | grep 'Apache CouchDB #{node['couch_db']['src_version']}'" && ::File.exists?('/usr/local/bin/couchdb') }
+end
 
 # Manual binary provisioning
 cookbook_file '/usr/local/bin/couchdb' do
